@@ -259,16 +259,13 @@ router.post("/:id/claim", async (req, res, next) => {
     const lead = leadRes.rows[0];
     if (!lead) return res.status(404).json({ error: "That lead no longer exists." });
 
-    const release = req.body && req.body.release;
+    const release = Boolean(req.body && req.body.release);
     const ownerId = release ? null : req.user.id;
+    const newStatus = release ? lead.status : (lead.status === "new" ? "working" : lead.status);
 
     await db.query(
-      `UPDATE leads SET owner_id = $1, status = CASE WHEN $1::int IS NULL THEN status
-                                                    WHEN status = 'new' THEN 'working'
-                                                    ELSE status END,
-                        updated_at = NOW()
-        WHERE id = $2`,
-      [ownerId, lead.id]
+      `UPDATE leads SET owner_id = $1, status = $2, updated_at = NOW() WHERE id = $3`,
+      [ownerId, newStatus, lead.id]
     );
 
     await logActivity(lead.id, req.user.id, "claim", release ? "Released back to the pool" : "Claimed this lead");
