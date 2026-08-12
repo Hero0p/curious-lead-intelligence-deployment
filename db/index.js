@@ -9,6 +9,9 @@ const connectionString =
 
 const poolConfig = {
   connectionString,
+  max: 2, // Minimal connections per serverless function instance to prevent pool exhaustion
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 10000,
 };
 
 if (connectionString && !connectionString.includes("localhost")) {
