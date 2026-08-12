@@ -36,6 +36,7 @@ app.use("/api/stats", require("./routes/stats"));
 app.use("/api/leads", require("./routes/leads"));
 app.use("/api/signals", require("./routes/signals"));
 app.use("/api/admin", require("./routes/admin"));
+app.use("/api/cron", require("./routes/cron"));
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -50,19 +51,26 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something broke on our side. Check the server log." });
 });
 
-purgeExpiredSessions();
-setInterval(purgeExpiredSessions, 6 * 3600e3).unref();
+purgeExpiredSessions().catch(() => {});
+setInterval(() => purgeExpiredSessions().catch(() => {}), 6 * 3600e3).unref();
 
-const userCount = db.prepare("SELECT COUNT(*) n FROM users").get().n;
+// Start local server when executed directly (not when imported as a serverless module on Vercel)
+if (require.main === module || !process.env.VERCEL) {
+  app.listen(PORT, async () => {
+    console.log(`\n  Curious Media - Lead Intelligence (PostgreSQL / Supabase)`);
+    console.log(`  Running at http://localhost:${PORT}`);
+    try {
+      await db.initSchema();
+      const userRes = await db.query("SELECT COUNT(*)::int n FROM users");
+      const userCount = userRes.rows[0]?.n || 0;
+      if (userCount === 0) {
+        console.log(`\n  No accounts yet. Stop the server and run:  npm run setup\n`);
+      }
+    } catch (err) {
+      console.error("[db] schema init note:", err.message);
+    }
+    scheduler.start();
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`\n  Curious Media - Lead Intelligence`);
-  console.log(`  Running at http://localhost:${PORT}`);
-  console.log(`  Database:  ${db.DB_PATH}`);
-  if (userCount === 0) {
-    console.log(`\n  No accounts yet. Stop the server and run:  npm run setup\n`);
-  } else {
-    console.log("");
-  }
-  scheduler.start();
-});
+module.exports = app;

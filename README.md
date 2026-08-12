@@ -1,137 +1,90 @@
 # Curious Media — Lead Intelligence
 
-The news scraper, rebuilt as a web app for the team. Same NewsAPI.ai queries as
-before; instead of appending rows to a Google Sheet it stores everything in a
-local database and serves it as a working surface: leads, signals, ownership and
-outreach history.
+The news scraper, rebuilt as a modern web app for the team. Watches news sources (via NewsAPI.ai / Event Registry) for buying signals, enriches them with AI summaries & scoring, and turns them into trackable leads.
+
+Database: **Supabase (PostgreSQL)**  
+Hosting: **Vercel (Serverless + Vercel Cron)**
 
 ---
 
-## Run it
+## Quick Start (Local Setup)
 
+1. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+2. **Configure `.env`**:
+   ```bash
+   cp .env.example .env
+   ```
+   Add your `DATABASE_URL` (Supabase Connection URI) and `NEWSAPI_AI_KEY`.
+
+3. **Initialize Database & Create First Admin**:
+   ```bash
+   npm run setup
+   ```
+   This creates all database tables in Supabase, seeds the default watchlist, and prompts for your initial admin credentials.
+
+4. **Start local dev server**:
+   ```bash
+   npm start
+   ```
+   Open `http://localhost:3000`.
+
+---
+
+## Deploying to Vercel (100% Free)
+
+### Step 1: Create Supabase Project
+1. Go to [supabase.com](https://supabase.com) and create a free project.
+2. Go to **Project Settings** → **Database** → **Connection String** → select **URI**.
+3. Copy the URI (`postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`).
+
+### Step 2: Push Code to GitHub
 ```bash
-npm install
-cp .env.example .env      # already filled in with your existing keys
-npm run setup             # seeds the watchlist, creates the first admin account
-npm start                 # http://localhost:3000
+git add .
+git commit -m "Migrate to Supabase and Vercel"
+git push origin main
 ```
 
-`npm run setup` asks for a username, display name and password. That account is
-an admin. Everyone else gets added from the **Admin** tab inside the app.
+### Step 3: Import to Vercel
+1. Go to [vercel.com](https://vercel.com) and click **Add New** → **Project**.
+2. Select your GitHub repository (`Hero0p/curious-lead-intelligence-deployment`).
+3. Add the following **Environment Variables** in Vercel:
+   - `DATABASE_URL`: Your Supabase connection string.
+   - `NEWSAPI_AI_KEY`: Your NewsAPI.ai key.
+   - `GEMINI_API_KEY`: *(Optional)* Your Google Gemini key for summaries & scoring.
+   - `GEMINI_MODEL`: `gemini-2.0-flash`
+   - `SECURE_COOKIES`: `true`
+   - `ADMIN_USERNAME`: `admin`
+   - `ADMIN_PASSWORD`: Your desired admin password (min 6 characters)
+   - `ADMIN_DISPLAY_NAME`: `Admin`
+4. Click **Deploy**.
 
-To pull the first batch of articles: sign in → **Admin** → **Run a cycle now**.
-After that it runs itself at 2am and 2pm.
-
----
-
-## What replaced what
-
-| Before | Now |
-| --- | --- |
-| `config/companies.js`, `config/sites.js` | Admin tab → editable without touching code |
-| `config/topics.js` (commented out) | Admin tab → "Topic narrowing", off by default |
-| `sheets.js` → `spreadsheets.values.append` | SQLite (`data/leads.db`) + the web UI |
-| `node index.js`, run by hand | cron at 2am/2pm + a "Run a cycle now" button |
-| `prompt.js` (written, never wired in) | `services/enrich.js`, runs on every new article |
-| Duplicate rows on every run | URL is a unique key — an article is stored once |
-
-Your original `scrapers/genericScraper.js` is carried over nearly unchanged, so
-the queries hitting NewsAPI.ai are the same ones you have already tuned.
+### Step 4: Run Initial Seed
+Run `npm run setup` locally with your Supabase `DATABASE_URL` in `.env`, or execute the SQL in [db/schema.sql](file:///c:/Users/nisha/Downloads/curious-lead-intelligence/curious-lead-intelligence/db/schema.sql) in the Supabase SQL Editor.
 
 ---
 
-## How the app is organised
-
-**Signals** are articles. One row per URL, deduped forever.
-
-**Leads** are companies. Every company on the watchlist has exactly one lead,
-and the lead holds all the outreach state: status, owner, contact details, last
-contacted date, next follow-up, activity log. News flows in; the lead is what
-the team actually works.
-
-That split is what makes the filters useful — "unclaimed companies with a
-funding signal in the last 7 days" is one query, not a spreadsheet sort.
-
-### The tabs
-
-- **Today's Leads** — companies with something discovered in the last 24 hours. The morning list.
-- **All Leads** — the full watchlist, filterable.
-- **Signals** — the raw article feed with the AI summary and source link.
-- **My Outreach** — leads you own.
-- **Admin** — watchlist, sources, team, and the run history. Admins only.
-
-### What Gemini adds
-
-For each new article it writes a two-sentence summary, a one-line **why it
-matters** aimed at a marketing pitch, a signal type (funding / launch /
-expansion / leadership / M&A / partnership / financials) and a 0–100 urgency
-score. The score drives the default sort, so the strongest openings sit at the
-top of the morning list.
-
-If the Gemini key is missing or a call fails, articles are classified by
-keyword instead and everything else keeps working. You'll see it in the Admin
-tab.
+## Automated Scheduling (Vercel Cron)
+Scheduled scraping runs are configured in `vercel.json` to hit `/api/cron` twice daily (at 2:00 AM and 2:00 PM UTC/configured schedule).
 
 ---
 
-## Configuration
-
-Everything lives in `.env`:
-
-| Key | Purpose |
-| --- | --- |
-| `NEWSAPI_AI_KEY` | Required. NewsAPI.ai / Event Registry. |
-| `GEMINI_API_KEY` | Optional. Enables summaries and scoring. |
-| `GEMINI_MODEL` | Defaults to `gemini-2.0-flash`. |
-| `PORT` | Defaults to 3000. |
-| `CRON_SCHEDULE` | Defaults to `0 2,14 * * *`. |
-| `TZ_NAME` | Defaults to `Asia/Kolkata`. |
-| `DISABLE_SCHEDULER` | Set `true` to run cycles only by hand. |
-| `RESULTS_PER_QUERY` | Articles per company-per-source. Defaults to 10. |
-| `REQUEST_DELAY_MS` | Throttle between API calls. Defaults to 500. |
-| `DB_PATH` | Where the SQLite file lives. |
-| `SECURE_COOKIES` | Set `true` only when serving over HTTPS. |
-
-### API budget
-
-One cycle is `active companies × active sources` requests. Your starting
-watchlist is 7 × 13 = **91 requests per cycle, 182 a day**. Adding a company adds
-13 requests per cycle. If you hit your NewsAPI.ai quota, pause sources you don't
-need in the Admin tab — that's the fastest lever.
-
----
-
-## Putting it on a shared machine
-
-It's a normal Node app with no external services, so any small VM works:
-
-```bash
-npm install -g pm2
-pm2 start server.js --name leads
-pm2 save && pm2 startup
-```
-
-Then put nginx in front with TLS and set `SECURE_COOKIES=true`. The database is
-the single file at `data/leads.db` — back that up and you've backed up
-everything.
-
-Sessions are cookie-based and last 14 days. Passwords are hashed with scrypt.
-
----
-
-## Layout
+## Project Structure
 
 ```
-server.js              Express entry point
-db/schema.sql          Tables (applied on every boot, safe to re-run)
-db/seed.js             npm run setup
-scrapers/              NewsAPI.ai fetcher, carried over from the old project
+api/index.js           Vercel serverless entry point
+server.js              Express application
+db/index.js            PostgreSQL connection pool (pg)
+db/schema.sql          PostgreSQL / Supabase table schema
+db/seed.js             Watchlist seeder & admin creator (npm run setup)
+scrapers/              NewsAPI.ai fetcher
 services/pipeline.js   fetch → dedupe → enrich → store
 services/enrich.js     Gemini classification + keyword fallback
-services/scheduler.js  cron
-routes/                auth, leads, signals, stats, admin
-public/                the UI (no build step — plain HTML/CSS/JS)
+services/scheduler.js  node-cron for local runs
+routes/                auth, leads, signals, stats, admin, cron
+public/                Frontend UI (plain HTML/CSS/JS)
+vercel.json            Vercel routing & Cron schedule
 ```
-
-`npm run scrape` runs one cycle from the command line, no server needed —
-handy for cron on a machine where you'd rather not keep the web app running.

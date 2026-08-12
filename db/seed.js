@@ -5,7 +5,6 @@ const db = require("./index");
 const { hashPassword } = require("../lib/auth");
 const { ensureLead } = require("../services/pipeline");
 
-// Carried over from the original config/ folder so nothing is lost in the move.
 const SITES = [
   { name: "ottplay", domain: "ottplay.com" },
   { name: "hindustan-times", domain: "hindustantimes.com" },
@@ -32,7 +31,6 @@ const COMPANIES = [
   { name: "Essar Group", keywords: ["Essar Group"] },
 ];
 
-// Off by default - turning these on narrows results to business events only.
 const TOPICS = [
   "funding", "raises", "IPO", "valuation", "investment", "series A", "series B",
   "appoints", "hires", "resigns", "steps down", "new CEO",
@@ -70,63 +68,95 @@ function ask(question, { silent = false } = {}) {
 }
 
 (async () => {
-  console.log("\nCurious Media - Lead Intelligence setup\n");
+  try {
+    console.log("\nCurious Media - Lead Intelligence setup (Supabase / PostgreSQL)\n");
 
-  // --- watchlist -------------------------------------------------------------
-  const insertSite = db.prepare("INSERT OR IGNORE INTO sites (name, domain) VALUES (?, ?)");
-  const insertCompany = db.prepare("INSERT OR IGNORE INTO companies (name, keywords) VALUES (?, ?)");
-  const insertTopic = db.prepare("INSERT OR IGNORE INTO topics (keyword, active) VALUES (?, 0)");
+    // --- apply schema --------------------------------------------------------
+    console.log("Checking database schema...");
+    await db.initSchema();
 
-  db.transaction(() => {
-    for (const s of SITES) insertSite.run(s.name, s.domain);
-    for (const c of COMPANIES) insertCompany.run(c.name, JSON.stringify(c.keywords));
-    for (const t of TOPICS) insertTopic.run(t);
-  })();
+    // --- watchlist -------------------------------------------------------------
+    for (const s of SITES) {
+      await db.query(
+        "INSERT INTO sites (name, domain, active) VALUES ($1, $2, true) ON CONFLICT (domain) DO NOTHING",
+        [s.name, s.domain]
+      );
+    }
 
-  for (const c of db.prepare("SELECT id FROM companies").all()) ensureLead(c.id);
+    for (const c of COMPANIES) {
+      await db.query(
+        "INSERT INTO companies (name, keywords, active) VALUES ($1, $2, true) ON CONFLICT (name) DO NOTHING",
+        [c.name, JSON.stringify(c.keywords)]
+      );
+    }
 
-  console.log(
-    `Watchlist ready: ${db.prepare("SELECT COUNT(*) n FROM companies").get().n} companies, ` +
-      `${db.prepare("SELECT COUNT(*) n FROM sites").get().n} sources, ` +
-      `${db.prepare("SELECT COUNT(*) n FROM topics").get().n} topic keywords (off by default).`
-  );
+    for (const t of TOPICS) {
+      await db.query(
+        "INSERT INTO topics (keyword, active) VALUES ($1, false) ON CONFLICT (keyword) DO NOTHING",
+        [t]
+      );
+    }
 
-  // --- admin account ---------------------------------------------------------
-  const adminCount = db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin'").get().n;
-  if (adminCount > 0) {
-    console.log(`\n${adminCount} admin account(s) already exist. Nothing else to do.`);
-    console.log("Start the app with:  npm start\n");
+    const companiesRes = await db.query("SELECT id FROM companies");
+    for (const c of companiesRes.rows) {
+      await ensureLead(c.id);
+    }
+
+    const [cCount, sCount, tCount] = await Promise.all([
+      db.query("SELECT COUNT(*)::int n FROM companies"),
+      db.query("SELECT COUNT(*)::int n FROM sites"),
+      db.query("SELECT COUNT(*)::int n FROM topics"),
+    ]);
+
+    console.log(
+      `Watchlist ready: ${cCount.rows[0].n} companies, ` +
+        `${sCount.rows[0].n} sources, ` +
+        `${tCount.rows[0].n} topic keywords (off by default).`
+    );
+
+    // --- admin account ---------------------------------------------------------
+    const adminCountRes = await db.query("SELECT COUNT(*)::int n FROM users WHERE role = 'admin'");
+    const adminCount = adminCountRes.rows[0]?.n || 0;
+    if (adminCount > 0) {
+      console.log(`\n${adminCount} admin account(s) already exist. Nothing else to do.`);
+      console.log("Start the app with: npm start\n");
+      process.exit(0);
+    }
+
+    const envUser = (process.env.ADMIN_USERNAME || "").trim();
+    const envPass = (process.env.ADMIN_PASSWORD || "").trim();
+    const envName = (process.env.ADMIN_DISPLAY_NAME || "").trim() || envUser;
+
+    if (envUser && envPass.length >= 6) {
+      await db.query(
+        "INSERT INTO users (username, display_name, password_hash, role, active) VALUES ($1, $2, $3, 'admin', true)",
+        [envUser.toLowerCase(), envName, hashPassword(envPass)]
+      );
+      console.log(`\nAdmin "${envUser}" created from environment variables.`);
+      console.log("Start the app with: npm start\n");
+      process.exit(0);
+    }
+
+    console.log("\nCreate the first admin account.\n");
+    const username = (await ask("Username: ")) || "admin";
+    const displayName = (await ask("Display name: ")) || username;
+    let password = "";
+    while (password.length < 6) {
+      password = await ask("Password (min 6 chars): ", { silent: true });
+      if (password.length < 6) console.log("Too short, try again.");
+    }
+
+    await db.query(
+      "INSERT INTO users (username, display_name, password_hash, role, active) VALUES ($1, $2, $3, 'admin', true)",
+      [username.toLowerCase(), displayName, hashPassword(password)]
+    );
+
+    console.log(`\nAdmin "${username}" created.`);
+    console.log("Start the app with: npm start");
+    console.log("Then open the app and add the rest of your team from the Admin tab.\n");
     process.exit(0);
+  } catch (err) {
+    console.error("\n[setup failed]:", err.message);
+    process.exit(1);
   }
-
-  const envUser = (process.env.ADMIN_USERNAME || "").trim();
-  const envPass = (process.env.ADMIN_PASSWORD || "").trim();
-  const envName = (process.env.ADMIN_DISPLAY_NAME || "").trim() || envUser;
-
-  if (envUser && envPass.length >= 6) {
-    db.prepare(
-      "INSERT INTO users (username, display_name, password_hash, role) VALUES (?, ?, ?, 'admin')"
-    ).run(envUser.toLowerCase(), envName, hashPassword(envPass));
-    console.log(`\nAdmin "${envUser}" created from environment variables.`);
-    console.log("Start the app with:  npm start\n");
-    process.exit(0);
-  }
-
-  console.log("\nCreate the first admin account.\n");
-  const username = (await ask("Username: ")) || "admin";
-  const displayName = (await ask("Display name: ")) || username;
-  let password = "";
-  while (password.length < 6) {
-    password = await ask("Password (min 6 chars): ", { silent: true });
-    if (password.length < 6) console.log("Too short, try again.");
-  }
-
-  db.prepare(
-    "INSERT INTO users (username, display_name, password_hash, role) VALUES (?, ?, ?, 'admin')"
-  ).run(username.toLowerCase(), displayName, hashPassword(password));
-
-  console.log(`\nAdmin "${username}" created.`);
-  console.log("Start the app with:  npm start");
-  console.log("Then open the app URL and add the rest of your team from the Admin tab.\n");
-  process.exit(0);
 })();

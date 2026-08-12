@@ -20,23 +20,28 @@ function runState() {
   return currentRun ? { ...currentRun } : null;
 }
 
-/** Cross-multiplies active sites x active companies, exactly like build.js did. */
-function buildQueries() {
-  const companies = db.prepare("SELECT * FROM companies WHERE active = 1 ORDER BY name").all();
-  const sites = db.prepare("SELECT * FROM sites WHERE active = 1 ORDER BY name").all();
-  const topics = db
-    .prepare("SELECT keyword FROM topics WHERE active = 1")
-    .all()
-    .map((t) => t.keyword);
+/** Cross-multiplies active sites x active companies */
+async function buildQueries() {
+  const [companiesRes, sitesRes, topicsRes] = await Promise.all([
+    db.query("SELECT * FROM companies WHERE active = true ORDER BY name"),
+    db.query("SELECT * FROM sites WHERE active = true ORDER BY name"),
+    db.query("SELECT keyword FROM topics WHERE active = true"),
+  ]);
+
+  const companies = companiesRes.rows;
+  const sites = sitesRes.rows;
+  const topics = topicsRes.rows.map((t) => t.keyword);
 
   const configs = [];
   for (const site of sites) {
     for (const company of companies) {
-      let keywords;
-      try {
-        keywords = JSON.parse(company.keywords);
-      } catch {
-        keywords = [company.name];
+      let keywords = company.keywords;
+      if (typeof keywords === "string") {
+        try {
+          keywords = JSON.parse(keywords);
+        } catch {
+          keywords = [company.name];
+        }
       }
       if (!Array.isArray(keywords) || keywords.length === 0) keywords = [company.name];
 
@@ -57,16 +62,21 @@ function buildQueries() {
 }
 
 /** Every company on the watchlist gets a lead row, created on first sight. */
-function ensureLead(companyId) {
-  const existing = db.prepare("SELECT id FROM leads WHERE company_id = ?").get(companyId);
-  if (existing) return existing.id;
-  const info = db.prepare("INSERT INTO leads (company_id) VALUES (?)").run(companyId);
-  return info.lastInsertRowid;
+async function ensureLead(companyId) {
+  const existing = await db.query("SELECT id FROM leads WHERE company_id = $1", [companyId]);
+  if (existing.rows[0]) return existing.rows[0].id;
+  const insertRes = await db.query(
+    "INSERT INTO leads (company_id) VALUES ($1) ON CONFLICT (company_id) DO UPDATE SET updated_at = NOW() RETURNING id",
+    [companyId]
+  );
+  return insertRes.rows[0].id;
 }
 
-function backfillLeads() {
-  const companies = db.prepare("SELECT id FROM companies").all();
-  for (const c of companies) ensureLead(c.id);
+async function backfillLeads() {
+  const companiesRes = await db.query("SELECT id FROM companies");
+  for (const c of companiesRes.rows) {
+    await ensureLead(c.id);
+  }
 }
 
 /**
@@ -79,10 +89,10 @@ async function runPipeline(trigger = "manual", log = console.log) {
     throw new Error("A scrape is already running. Wait for it to finish.");
   }
 
-  const runInfo = db.prepare("INSERT INTO runs (trigger) VALUES (?)").run(trigger);
-  const runId = runInfo.lastInsertRowid;
+  const runRes = await db.query("INSERT INTO runs (trigger) VALUES ($1) RETURNING id", [trigger]);
+  const runId = runRes.rows[0].id;
 
-  const queries = buildQueries();
+  const queries = await buildQueries();
   currentRun = {
     id: runId,
     trigger,
@@ -94,10 +104,10 @@ async function runPipeline(trigger = "manual", log = console.log) {
     errors: 0,
   };
 
-  backfillLeads();
+  await backfillLeads();
 
   if (queries.length === 0) {
-    finishRun(runId, currentRun, "done", "Nothing to run - add a company and a source first.");
+    await finishRun(runId, currentRun, "done", "Nothing to run - add a company and a source first.");
     const snapshot = runState();
     currentRun = null;
     return snapshot;
@@ -105,10 +115,8 @@ async function runPipeline(trigger = "manual", log = console.log) {
 
   log(`[run ${runId}] ${queries.length} queries (${trigger})`);
 
-  const fresh = [];        // articles whose URL we have never seen
+  const fresh = []; // articles whose URL we have never seen
   const seenThisRun = new Set();
-
-  const urlExists = db.prepare("SELECT 1 FROM signals WHERE url = ?");
 
   try {
     for (const config of queries) {
@@ -119,7 +127,11 @@ async function runPipeline(trigger = "manual", log = console.log) {
         for (const article of articles) {
           if (!article.url) continue;
           if (seenThisRun.has(article.url)) continue;
-          if (urlExists.get(article.url)) continue;
+
+          // Check if exists in DB
+          const existsRes = await db.query("SELECT 1 FROM signals WHERE url = $1", [article.url]);
+          if (existsRes.rows.length > 0) continue;
+
           seenThisRun.add(article.url);
           fresh.push(article);
         }
@@ -129,22 +141,24 @@ async function runPipeline(trigger = "manual", log = console.log) {
       }
 
       currentRun.done += 1;
-      await delay(REQUEST_DELAY_MS);
+      if (REQUEST_DELAY_MS > 0) {
+        await delay(REQUEST_DELAY_MS);
+      }
     }
 
     log(`[run ${runId}] ${currentRun.fetched} fetched, ${fresh.length} new after dedupe.`);
 
     if (fresh.length > 0) {
       const enrichment = await enrichArticles(fresh, log);
-      saveSignals(fresh, enrichment, runId);
+      await saveSignals(fresh, enrichment, runId);
       currentRun.newSignals = fresh.length;
     }
 
-    recomputeLeadRollups();
-    finishRun(runId, currentRun, "done", null);
+    await recomputeLeadRollups();
+    await finishRun(runId, currentRun, "done", null);
     log(`[run ${runId}] Done. ${currentRun.newSignals} new signals stored.`);
   } catch (err) {
-    finishRun(runId, currentRun, "failed", err.message);
+    await finishRun(runId, currentRun, "failed", err.message);
     log(`[run ${runId}] Failed: ${err.message}`);
     currentRun = null;
     throw err;
@@ -155,45 +169,48 @@ async function runPipeline(trigger = "manual", log = console.log) {
   return snapshot;
 }
 
-const insertSignal = () =>
-  db.prepare(
-    `INSERT OR IGNORE INTO signals
-       (lead_id, company, title, url, author, published, site, section_title,
-        body, summary, why_it_matters, signal_type, score, enriched, run_id)
-     VALUES (@lead_id, @company, @title, @url, @author, @published, @site, @section_title,
-             @body, @summary, @why_it_matters, @signal_type, @score, @enriched, @run_id)`
-  );
+async function saveSignals(articles, enrichment, runId) {
+  for (let i = 0; i < articles.length; i++) {
+    const article = articles[i];
+    const e = enrichment[i] || {};
+    const leadId = await ensureLead(article.companyId);
 
-function saveSignals(articles, enrichment, runId) {
-  const stmt = insertSignal();
-  const tx = db.transaction(() => {
-    articles.forEach((article, i) => {
-      const e = enrichment[i] || {};
-      stmt.run({
-        lead_id: ensureLead(article.companyId),
-        company: article.company,
-        title: article.title,
-        url: article.url,
-        author: article.author,
-        published: article.published,
-        site: article.site,
-        section_title: article.section_title,
-        body: (article.body || "").slice(0, 8000) || null,
-        summary: e.summary || null,
-        why_it_matters: e.why_it_matters || null,
-        signal_type: e.signal_type || "other",
-        score: Number.isFinite(e.score) ? e.score : 40,
-        enriched: e.enriched ? 1 : 0,
-        run_id: runId,
-      });
-    });
-  });
-  tx();
+    let pubDate = null;
+    if (article.published) {
+      const parsedDate = new Date(article.published);
+      if (!isNaN(parsedDate.getTime())) pubDate = parsedDate.toISOString();
+    }
+
+    await db.query(
+      `INSERT INTO signals
+         (lead_id, company, title, url, author, published, site, section_title,
+          body, summary, why_it_matters, signal_type, score, enriched, run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (url) DO NOTHING`,
+      [
+        leadId,
+        article.company,
+        article.title || null,
+        article.url,
+        article.author || null,
+        pubDate,
+        article.site || null,
+        article.section_title || null,
+        (article.body || "").slice(0, 8000) || null,
+        e.summary || null,
+        e.why_it_matters || null,
+        e.signal_type || "other",
+        Number.isFinite(e.score) ? e.score : 40,
+        Boolean(e.enriched),
+        runId,
+      ]
+    );
+  }
 }
 
 /** Keeps leads.last_signal_at / leads.score in sync with their signals. */
-function recomputeLeadRollups() {
-  db.prepare(
+async function recomputeLeadRollups() {
+  await db.query(
     `UPDATE leads
         SET last_signal_at = (
               SELECT MAX(COALESCE(s.published, s.created_at)) FROM signals s WHERE s.lead_id = leads.id
@@ -201,18 +218,19 @@ function recomputeLeadRollups() {
             score = COALESCE((
               SELECT MAX(s.score) FROM signals s
                WHERE s.lead_id = leads.id
-                 AND COALESCE(s.published, s.created_at) >= datetime('now', '-30 days')
+                 AND COALESCE(s.published, s.created_at) >= NOW() - INTERVAL '30 days'
             ), 0)`
-  ).run();
+  );
 }
 
-function finishRun(runId, state, status, message) {
-  db.prepare(
+async function finishRun(runId, state, status, message) {
+  await db.query(
     `UPDATE runs
-        SET status = ?, queries = ?, fetched = ?, new_signals = ?, errors = ?,
-            message = ?, finished_at = datetime('now')
-      WHERE id = ?`
-  ).run(status, state.total, state.fetched, state.newSignals, state.errors, message, runId);
+        SET status = $1, queries = $2, fetched = $3, new_signals = $4, errors = $5,
+            message = $6, finished_at = NOW()
+      WHERE id = $7`,
+    [status, state.total, state.fetched, state.newSignals, state.errors, message, runId]
+  );
 }
 
 module.exports = { runPipeline, buildQueries, isRunning, runState, recomputeLeadRollups, ensureLead };
