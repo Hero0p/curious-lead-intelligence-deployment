@@ -1,0 +1,22 @@
+{
+  "name": "curious-lead-intelligence",
+  "version": "1.0.0",
+  "description": "Lead intelligence platform for Curious Media - watches news sources for buying signals and turns them into trackable leads.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node db/seed.js",
+    "scrape": "node services/runOnce.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "axios": "^1.7.0",
+    "better-sqlite3": "^11.5.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

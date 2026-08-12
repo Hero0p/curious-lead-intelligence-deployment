@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Curious Media &middot; Lead Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<!-- ── Sign in ───────────────────────────────────────────────────────────── -->
+<div id="login" class="login" hidden>
+  <form class="login-card" id="login-form">
+    <p class="eyebrow"><span class="dot"></span>Lead intelligence</p>
+    <h1 class="wordmark">Curious <span>Media</span></h1>
+    <p class="login-sub">Sign in to pick up today's leads.</p>
+
+    <label class="field">
+      <span>Username</span>
+      <input name="username" autocomplete="username" autofocus required />
+    </label>
+    <label class="field">
+      <span>Password</span>
+      <input name="password" type="password" autocomplete="current-password" required />
+    </label>
+
+    <p class="form-error" id="login-error" hidden></p>
+    <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+  </form>
+</div>
+
+<!-- ── App ───────────────────────────────────────────────────────────────── -->
+<div id="app" hidden>
+
+  <header class="topbar">
+    <div class="brand">
+      <p class="eyebrow"><span class="dot"></span>Lead intelligence</p>
+      <h1 class="wordmark">Curious <span>Media</span></h1>
+    </div>
+    <div class="whoami">
+      <div class="whoami-text">
+        <strong id="me-name">—</strong>
+        <span id="me-role">—</span>
+      </div>
+      <button class="btn btn-ghost" id="signout">Sign out</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats">
+    <article class="stat">
+      <p class="stat-label">New in last 24h</p>
+      <p class="stat-value" data-stat="newIn24h">0</p>
+      <p class="stat-note">ready for this morning</p>
+    </article>
+    <article class="stat">
+      <p class="stat-label">Active pipeline</p>
+      <p class="stat-value" data-stat="activePipeline">0</p>
+      <p class="stat-note">not yet closed</p>
+    </article>
+    <article class="stat">
+      <p class="stat-label">Follow-ups due</p>
+      <p class="stat-value" data-stat="followupsDue">0</p>
+      <p class="stat-note">today or overdue</p>
+    </article>
+    <article class="stat">
+      <p class="stat-label">Touched this week</p>
+      <p class="stat-value" data-stat="touchedThisWeek">0</p>
+      <p class="stat-note">across the team</p>
+    </article>
+  </section>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab is-active" data-tab="today">Today's Leads <span class="pill" data-count="today">0</span></button>
+    <button class="tab" data-tab="all">All Leads <span class="pill" data-count="all">0</span></button>
+    <button class="tab" data-tab="signals">Signals</button>
+    <button class="tab" data-tab="mine">My Outreach <span class="pill" data-count="mine">0</span></button>
+    <button class="tab" data-tab="admin" id="tab-admin">Admin</button>
+  </nav>
+
+  <main class="layout" id="layout">
+
+    <aside class="filters" id="filters">
+      <input class="search" id="search" type="search" placeholder="Search company…" />
+
+      <div class="filter-group">
+        <p class="filter-title">Outreach hygiene</p>
+        <label class="check"><input type="checkbox" data-hygiene="stale30" /> Not contacted in 30 days</label>
+        <label class="check"><input type="checkbox" data-hygiene="unclaimed" /> Unclaimed only</label>
+        <label class="check"><input type="checkbox" data-hygiene="mine" /> Assigned to me</label>
+        <label class="check"><input type="checkbox" data-hygiene="followup" /> Follow-up due</label>
+        <label class="check"><input type="checkbox" data-hygiene="hascontact" /> Has a contact on file</label>
+      </div>
+
+      <div class="filter-group">
+        <p class="filter-title">Signal freshness</p>
+        <div class="chips" id="freshness">
+          <button class="chip" data-freshness="24h">Last 24h</button>
+          <button class="chip" data-freshness="48h">Last 48h</button>
+          <button class="chip" data-freshness="7d">Last 7 days</button>
+          <button class="chip" data-freshness="30d">Last 30 days</button>
+        </div>
+      </div>
+
+      <div class="filter-group">
+        <p class="filter-title">Signal type</p>
+        <div class="chips" id="types"></div>
+      </div>
+
+      <div class="filter-group">
+        <p class="filter-title">Status</p>
+        <div class="chips" id="statuses"></div>
+      </div>
+
+      <button class="btn btn-quiet btn-block" id="clear-filters">Clear filters</button>
+    </aside>
+
+    <section class="content" id="content"></section>
+  </main>
+</div>
+
+<!-- ── Lead drawer ───────────────────────────────────────────────────────── -->
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Lead detail"></aside>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
