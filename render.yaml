@@ -2,7 +2,7 @@ services:
   - type: web
     name: curious-lead-intelligence
     runtime: node
-    plan: starter # Starter or higher is required for persistent disk
+    plan: free # 100% Free - No credit card / payment info required
     region: oregon
     buildCommand: npm install && node db/seed.js
     startCommand: npm start
@@ -21,15 +21,9 @@ services:
         value: Asia/Kolkata
       - key: CRON_SCHEDULE
         value: "0 2,14 * * *"
-      - key: DB_PATH
-        value: /var/data/leads.db
       - key: ADMIN_USERNAME
-        sync: false
+        value: admin
       - key: ADMIN_PASSWORD
         sync: false
       - key: ADMIN_DISPLAY_NAME
         value: Admin
-    disk:
-      name: leads-data
-      mountPath: /var/data
-      sizeGB: 1
